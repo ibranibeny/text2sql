@@ -21,14 +21,24 @@ APP_DIR="/home/$(whoami)/text2sql"
 # -----------------------------------------------------------
 echo "[1/7] Updating system packages..."
 sudo apt-get update -qq
+
+# Install software-properties-common for add-apt-repository, and lsb-release
 sudo apt-get install -y -qq \
-    python3.11 \
-    python3.11-venv \
-    python3-pip \
+    software-properties-common \
+    lsb-release \
     curl \
     gnupg2 \
     unixodbc \
     unixodbc-dev \
+    > /dev/null 2>&1
+
+# Add deadsnakes PPA for python3.11 (minimal image may not have it)
+sudo add-apt-repository -y ppa:deadsnakes/ppa > /dev/null 2>&1
+sudo apt-get update -qq
+sudo apt-get install -y -qq \
+    python3.11 \
+    python3.11-venv \
+    python3.11-dev \
     > /dev/null 2>&1
 echo "  ✓ System packages installed."
 
@@ -36,13 +46,14 @@ echo "  ✓ System packages installed."
 # 2. Microsoft ODBC Driver 18
 # -----------------------------------------------------------
 echo "[2/7] Installing ODBC Driver 18 for SQL Server..."
-if ! dpkg -l msodbcsql18 &> /dev/null; then
+if ! dpkg -s msodbcsql18 &> /dev/null; then
+    # Import Microsoft GPG key (--yes to overwrite if exists)
     curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | \
-        sudo gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg 2>/dev/null
+        sudo gpg --yes --dearmor -o /usr/share/keyrings/microsoft-prod.gpg
 
-    # Detect Ubuntu version
-    UBUNTU_VERSION=$(lsb_release -rs)
-    UBUNTU_CODENAME=$(lsb_release -cs)
+    # Detect Ubuntu version from /etc/os-release (works on minimal images)
+    UBUNTU_VERSION=$(. /etc/os-release && echo "$VERSION_ID")
+    UBUNTU_CODENAME=$(. /etc/os-release && echo "$UBUNTU_CODENAME")
     echo "deb [arch=amd64 signed-by=/usr/share/keyrings/microsoft-prod.gpg] https://packages.microsoft.com/ubuntu/${UBUNTU_VERSION}/prod ${UBUNTU_CODENAME} main" | \
         sudo tee /etc/apt/sources.list.d/mssql-release.list > /dev/null
 
@@ -87,10 +98,15 @@ echo "  ✓ Python packages installed."
 # -----------------------------------------------------------
 echo "[5/7] Seeding the database..."
 
-# Load .env variables
-set -a
-source "$APP_DIR/.env"
-set +a
+# Load .env variables safely (handles values with braces/spaces)
+while IFS='=' read -r key value; do
+    # Skip comments and blank lines
+    [[ "$key" =~ ^#.*$ || -z "$key" ]] && continue
+    # Strip surrounding quotes from value
+    value="${value#\"}"
+    value="${value%\"}"
+    export "$key=$value"
+done < "$APP_DIR/.env"
 
 # Install sqlcmd if not present
 if ! command -v sqlcmd &> /dev/null; then
@@ -125,11 +141,9 @@ After=network.target
 Type=simple
 User=$(whoami)
 WorkingDirectory=$APP_DIR
+EnvironmentFile=$APP_DIR/.env
 Environment=PATH=$APP_DIR/venv/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=$APP_DIR/venv/bin/streamlit run app.py \
-    --server.port 8501 \
-    --server.headless true \
-    --server.address 0.0.0.0
+ExecStart=$APP_DIR/venv/bin/streamlit run app.py --server.port=8501 --server.headless=true --server.address=0.0.0.0
 Restart=always
 RestartSec=5
 

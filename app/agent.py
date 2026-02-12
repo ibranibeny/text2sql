@@ -19,7 +19,6 @@ Authentication:
 """
 
 import os
-import json
 import pyodbc
 from openai import AzureOpenAI
 from azure.identity import DefaultAzureCredential, get_bearer_token_provider

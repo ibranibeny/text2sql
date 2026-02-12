@@ -10,6 +10,7 @@ Run:
 """
 
 import streamlit as st
+import pandas as pd
 from agent import process_question
 
 # -----------------------------------------------------------
@@ -82,7 +83,6 @@ for msg in st.session_state.messages:
                     st.code(msg["sql"], language="sql")
             if msg.get("columns") and msg.get("rows"):
                 with st.expander(f"📊 Query Results ({len(msg['rows'])} rows)"):
-                    import pandas as pd
                     df = pd.DataFrame(msg["rows"], columns=msg["columns"])
                     st.dataframe(df, use_container_width=True)
 
@@ -122,7 +122,6 @@ if user_input:
             # Display results in expander
             if result["columns"] and result["rows"]:
                 with st.expander(f"📊 Query Results ({len(result['rows'])} rows)"):
-                    import pandas as pd
                     df = pd.DataFrame(result["rows"], columns=result["columns"])
                     st.dataframe(df, use_container_width=True)
 

@@ -307,20 +307,23 @@ main() {
     echo ""
     log "═══ PHASE 5: Deploying Application to VM ═══"
 
-    # Generate .env file
+    # Generate .env file (quoted heredoc prevents variable/special-char expansion)
     log "Generating .env configuration..."
-    cat > /tmp/text2sql_env <<EOF
+    cat > /tmp/text2sql_env <<'ENVEOF'
 # Microsoft Foundry / AI Foundry (Entra ID auth — no API key needed)
-AZURE_OPENAI_ENDPOINT=${AI_ENDPOINT}
-AZURE_OPENAI_DEPLOYMENT=${AI_DEPLOYMENT_NAME}
-
-# Azure SQL Database
-SQL_SERVER=${SQL_FQDN}
-SQL_DATABASE=${SQL_DB_NAME}
-SQL_USERNAME=${SQL_ADMIN_USER}
-SQL_PASSWORD="${SQL_ADMIN_PASSWORD}"
-SQL_DRIVER="{ODBC Driver 18 for SQL Server}"
-EOF
+ENVEOF
+    # Append variables with proper quoting
+    {
+        echo "AZURE_OPENAI_ENDPOINT=$AI_ENDPOINT"
+        echo "AZURE_OPENAI_DEPLOYMENT=$AI_DEPLOYMENT_NAME"
+        echo ""
+        echo "# Azure SQL Database"
+        echo "SQL_SERVER=$SQL_FQDN"
+        echo "SQL_DATABASE=$SQL_DB_NAME"
+        echo "SQL_USERNAME=$SQL_ADMIN_USER"
+        printf 'SQL_PASSWORD="%s"\n' "$SQL_ADMIN_PASSWORD"
+        echo 'SQL_DRIVER="{ODBC Driver 18 for SQL Server}"'
+    } >> /tmp/text2sql_env
     ok ".env file generated."
 
     # Wait for VM to be fully ready for SSH
