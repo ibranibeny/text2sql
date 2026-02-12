@@ -1,0 +1,191 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "Text-to-SQL API",
+    "description": "An Agentic AI REST API that converts natural language questions into T-SQL queries against an Azure SQL Database (SalesDB) containing Indonesian sales data. Uses Azure OpenAI GPT-4o for query generation and result synthesis.",
+    "version": "2.0.0"
+  },
+  "host": "REPLACE_WITH_VM_IP:8000",
+  "basePath": "/",
+  "schemes": ["http"],
+  "securityDefinitions": {
+    "ApiKeyAuth": {
+      "type": "apiKey",
+      "in": "header",
+      "name": "X-API-Key"
+    }
+  },
+  "security": [
+    {
+      "ApiKeyAuth": []
+    }
+  ],
+  "paths": {
+    "/api/ask": {
+      "post": {
+        "operationId": "AskQuestion",
+        "summary": "Ask a natural language question",
+        "description": "Send a natural language question about sales data. The API converts it to a T-SQL query, executes it against the SalesDB database, and returns a natural language answer along with the SQL and raw results. Use this for any question about customers, products, orders, order items, revenue, or sales analytics.",
+        "consumes": ["application/json"],
+        "produces": ["application/json"],
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "description": "The question to ask",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/AskRequest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response with answer, SQL, and results",
+            "schema": {
+              "$ref": "#/definitions/AskResponse"
+            }
+          },
+          "403": {
+            "description": "Invalid or missing API key"
+          },
+          "422": {
+            "description": "Validation error — question too short or too long"
+          }
+        }
+      }
+    },
+    "/api/schema": {
+      "get": {
+        "operationId": "GetSchema",
+        "summary": "Get database schema",
+        "description": "Retrieve the current database schema showing all tables, columns, data types, primary keys, foreign keys, and row counts. Use this when the user asks what data is available or wants to know the database structure.",
+        "produces": ["application/json"],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Database schema information",
+            "schema": {
+              "$ref": "#/definitions/SchemaResponse"
+            }
+          },
+          "403": {
+            "description": "Invalid or missing API key"
+          },
+          "500": {
+            "description": "Schema discovery failed"
+          }
+        }
+      }
+    },
+    "/api/health": {
+      "get": {
+        "operationId": "HealthCheck",
+        "summary": "Health check",
+        "description": "Returns the health status of the Text-to-SQL API service.",
+        "produces": ["application/json"],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Service is healthy",
+            "schema": {
+              "$ref": "#/definitions/HealthResponse"
+            }
+          },
+          "403": {
+            "description": "Invalid or missing API key"
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "AskRequest": {
+      "type": "object",
+      "required": ["question"],
+      "properties": {
+        "question": {
+          "type": "string",
+          "description": "The natural language question about the sales database.",
+          "minLength": 3,
+          "maxLength": 1000,
+          "example": "Show me the top 5 customers by total order amount"
+        }
+      }
+    },
+    "AskResponse": {
+      "type": "object",
+      "properties": {
+        "question": {
+          "type": "string",
+          "description": "The original question that was asked."
+        },
+        "answer": {
+          "type": "string",
+          "description": "Natural language answer synthesized from the query results."
+        },
+        "sql": {
+          "type": "string",
+          "description": "The T-SQL query that was generated and executed."
+        },
+        "columns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Column names from the query result."
+        },
+        "rows": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {}
+          },
+          "description": "Rows of data from the query result (max 50 rows)."
+        },
+        "row_count": {
+          "type": "integer",
+          "description": "Total number of rows returned."
+        },
+        "error": {
+          "type": "string",
+          "description": "Error message if the query failed."
+        },
+        "elapsed_seconds": {
+          "type": "number",
+          "description": "Time taken to process the request in seconds."
+        }
+      }
+    },
+    "SchemaResponse": {
+      "type": "object",
+      "properties": {
+        "schema_text": {
+          "type": "string",
+          "description": "Human-readable database schema with tables, columns, types, and relationships."
+        },
+        "table_count": {
+          "type": "integer",
+          "description": "Number of tables discovered."
+        }
+      }
+    },
+    "HealthResponse": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "description": "Service health status."
+        },
+        "service": {
+          "type": "string",
+          "description": "Service name."
+        },
+        "version": {
+          "type": "string",
+          "description": "API version."
+        }
+      }
+    }
+  }
+}
