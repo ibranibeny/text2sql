@@ -78,7 +78,8 @@ pip install -q \
     openai \
     pyodbc \
     python-dotenv \
-    pandas
+    pandas \
+    azure-identity
 echo "  ✓ Python packages installed."
 
 # -----------------------------------------------------------

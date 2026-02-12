@@ -212,16 +212,6 @@ main() {
         -o none
     ok "AI Services account created: $AI_ACCOUNT_NAME"
 
-    log "Enabling key-based authentication..."
-    az resource update \
-        --resource-group "$RG_AI_NAME" \
-        --name "$AI_ACCOUNT_NAME" \
-        --resource-type "Microsoft.CognitiveServices/accounts" \
-        --set properties.disableLocalAuth=false \
-        -o none 2>/dev/null \
-        && ok "Key auth enabled." \
-        || warn "Could not enable key auth (may be blocked by policy — see below)."
-
     log "Deploying model: $AI_MODEL_NAME ($AI_MODEL_VERSION)..."
     az cognitiveservices account deployment create \
         --name "$AI_ACCOUNT_NAME" \
@@ -235,19 +225,13 @@ main() {
         -o none
     ok "Model deployed: $AI_DEPLOYMENT_NAME"
 
-    # Retrieve endpoint and key
+    # Retrieve endpoint (no key needed — using Managed Identity)
     AI_ENDPOINT=$(az cognitiveservices account show \
         --name "$AI_ACCOUNT_NAME" \
         --resource-group "$RG_AI_NAME" \
         --query "properties.endpoint" -o tsv)
 
-    AI_KEY=$(az cognitiveservices account keys list \
-        --name "$AI_ACCOUNT_NAME" \
-        --resource-group "$RG_AI_NAME" \
-        --query "key1" -o tsv)
-
     ok "AI Endpoint: $AI_ENDPOINT"
-    ok "AI Key: ***${AI_KEY: -4}"
 
     # ===========================================================
     # PHASE 4: Azure VM
@@ -287,6 +271,28 @@ main() {
         -o none 2>/dev/null || true
     ok "Port 22 confirmed open."
 
+    log "Enabling system-assigned managed identity on VM..."
+    VM_PRINCIPAL_ID=$(az vm identity assign \
+        --resource-group "$RG_NAME" \
+        --name "$VM_NAME" \
+        --query systemAssignedIdentity -o tsv)
+    ok "Managed Identity enabled: $VM_PRINCIPAL_ID"
+
+    # Get the AI Services resource ID for role assignment
+    AI_RESOURCE_ID=$(az cognitiveservices account show \
+        --name "$AI_ACCOUNT_NAME" \
+        --resource-group "$RG_AI_NAME" \
+        --query id -o tsv)
+
+    log "Assigning 'Cognitive Services OpenAI User' role to VM identity..."
+    az role assignment create \
+        --assignee-object-id "$VM_PRINCIPAL_ID" \
+        --assignee-principal-type ServicePrincipal \
+        --role "Cognitive Services OpenAI User" \
+        --scope "$AI_RESOURCE_ID" \
+        -o none
+    ok "Role assigned. VM can now authenticate to AI Services via Entra ID."
+
     VM_IP=$(az vm show \
         --resource-group "$RG_NAME" \
         --name "$VM_NAME" \
@@ -304,9 +310,8 @@ main() {
     # Generate .env file
     log "Generating .env configuration..."
     cat > /tmp/text2sql_env <<EOF
-# Microsoft Foundry / AI Foundry
+# Microsoft Foundry / AI Foundry (Entra ID auth — no API key needed)
 AZURE_OPENAI_ENDPOINT=${AI_ENDPOINT}
-AZURE_OPENAI_API_KEY=${AI_KEY}
 AZURE_OPENAI_DEPLOYMENT=${AI_DEPLOYMENT_NAME}
 
 # Azure SQL Database

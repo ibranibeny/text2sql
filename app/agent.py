@@ -7,17 +7,22 @@ Two-stage LLM pipeline:
   2. synthesize_response() – Converts SQL results to natural language (temperature=0.3)
 
 Dependencies:
-  pip install openai pyodbc python-dotenv
+  pip install openai pyodbc python-dotenv azure-identity
 
 Environment variables (loaded from .env):
-  AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_API_KEY, AZURE_OPENAI_DEPLOYMENT
+  AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_DEPLOYMENT
   SQL_SERVER, SQL_DATABASE, SQL_USERNAME, SQL_PASSWORD, SQL_DRIVER
+
+Authentication:
+  Uses DefaultAzureCredential (Managed Identity on VM, or az login locally).
+  No API keys required.
 """
 
 import os
 import json
 import pyodbc
 from openai import AzureOpenAI
+from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -113,10 +118,14 @@ def get_db_connection() -> pyodbc.Connection:
 
 
 def get_openai_client() -> AzureOpenAI:
-    """Create an Azure OpenAI client."""
+    """Create an Azure OpenAI client using Entra ID (Managed Identity)."""
+    credential = DefaultAzureCredential()
+    token_provider = get_bearer_token_provider(
+        credential, "https://cognitiveservices.azure.com/.default"
+    )
     return AzureOpenAI(
         azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
-        api_key=os.getenv("AZURE_OPENAI_API_KEY"),
+        azure_ad_token_provider=token_provider,
         api_version="2024-08-01-preview",
     )
 
