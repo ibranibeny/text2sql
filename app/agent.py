@@ -2,9 +2,10 @@
 agent.py — Agentic AI Text-to-SQL Backend
 ==========================================
 
-Two-stage LLM pipeline:
-  1. generate_sql()       – Converts natural language to SQL (temperature=0.0)
-  2. synthesize_response() – Converts SQL results to natural language (temperature=0.3)
+Two-stage LLM pipeline with DYNAMIC schema discovery:
+  1. discover_schema()    – Queries INFORMATION_SCHEMA to learn the database
+  2. generate_sql()       – Converts natural language to SQL (temperature=0.0)
+  3. synthesize_response() – Converts SQL results to natural language (temperature=0.3)
 
 Dependencies:
   pip install openai pyodbc python-dotenv azure-identity
@@ -27,78 +28,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # -----------------------------------------------------------
-# Database schema context — injected into every LLM prompt
+# Schema cache (populated once on first request)
 # -----------------------------------------------------------
-DB_SCHEMA = """
-Database: SalesDB
-
-Table: Customers
-  - CustomerID   (INT, PK)
-  - FirstName    (NVARCHAR 50)
-  - LastName     (NVARCHAR 50)
-  - Email        (NVARCHAR 100, UNIQUE)
-  - City         (NVARCHAR 50)
-  - Country      (NVARCHAR 50, default 'Indonesia')
-  - JoinDate     (DATE)
-
-Table: Products
-  - ProductID    (INT, PK)
-  - ProductName  (NVARCHAR 100)
-  - Category     (NVARCHAR 50)       — values: Electronics, Furniture, Stationery
-  - Price        (DECIMAL 10,2)      — in IDR (Indonesian Rupiah)
-  - Stock        (INT)
-
-Table: Orders
-  - OrderID      (INT, PK)
-  - CustomerID   (INT, FK → Customers)
-  - OrderDate    (DATE)
-  - TotalAmount  (DECIMAL 12,2)      — in IDR
-  - Status       (NVARCHAR 20)       — values: Completed, Shipped, Processing
-
-Table: OrderItems
-  - OrderItemID  (INT, PK)
-  - OrderID      (INT, FK → Orders)
-  - ProductID    (INT, FK → Products)
-  - Quantity     (INT)
-  - UnitPrice    (DECIMAL 10,2)      — in IDR
-  - LineTotal    (computed: Quantity * UnitPrice)
-
-Relationships:
-  Orders.CustomerID   → Customers.CustomerID
-  OrderItems.OrderID  → Orders.OrderID
-  OrderItems.ProductID → Products.ProductID
-"""
-
-# -----------------------------------------------------------
-# System prompts
-# -----------------------------------------------------------
-SYSTEM_PROMPT = f"""You are an expert SQL query generator for Microsoft SQL Server (Azure SQL).
-Given a natural language question, generate ONLY the T-SQL query — no explanations, no markdown.
-
-Rules:
-1. Use only the tables and columns defined in the schema below.
-2. Use T-SQL syntax (TOP instead of LIMIT, etc.).
-3. Always qualify column names with table aliases when joining.
-4. Use appropriate JOINs — prefer INNER JOIN unless LEFT JOIN is needed.
-5. For aggregations, include GROUP BY for all non-aggregated columns.
-6. Return ONLY the SQL query. No commentary, no code fences.
-7. Prices are in IDR (Indonesian Rupiah).
-
-Schema:
-{DB_SCHEMA}
-"""
-
-SYNTHESIS_PROMPT = """You are a helpful data analyst assistant.
-Given a user question, the SQL query that was executed, and the query results,
-provide a clear, concise, natural language answer.
-
-Rules:
-1. Summarise the data — do not just dump raw rows.
-2. Format currency values in IDR with thousand separators.
-3. If no results were returned, say so clearly and suggest possible reasons.
-4. Be conversational but professional.
-5. If there are many rows, highlight key findings rather than listing all.
-"""
+_schema_cache: str | None = None
 
 
 def get_db_connection() -> pyodbc.Connection:
@@ -116,6 +48,207 @@ def get_db_connection() -> pyodbc.Connection:
     return pyodbc.connect(conn_str)
 
 
+def discover_schema() -> str:
+    """
+    Dynamically query the database to build a schema description.
+    Reads tables, columns, data types, primary keys, and foreign keys
+    from INFORMATION_SCHEMA and sys catalog views.
+    Results are cached after first call.
+    """
+    global _schema_cache
+    if _schema_cache is not None:
+        return _schema_cache
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+
+        # 1. Get all user tables and their columns
+        cursor.execute("""
+            SELECT
+                c.TABLE_NAME,
+                c.COLUMN_NAME,
+                c.DATA_TYPE,
+                c.CHARACTER_MAXIMUM_LENGTH,
+                c.NUMERIC_PRECISION,
+                c.NUMERIC_SCALE,
+                c.IS_NULLABLE,
+                c.COLUMN_DEFAULT
+            FROM INFORMATION_SCHEMA.COLUMNS c
+            INNER JOIN INFORMATION_SCHEMA.TABLES t
+                ON c.TABLE_NAME = t.TABLE_NAME
+                AND c.TABLE_SCHEMA = t.TABLE_SCHEMA
+            WHERE t.TABLE_TYPE = 'BASE TABLE'
+                AND t.TABLE_SCHEMA = 'dbo'
+            ORDER BY c.TABLE_NAME, c.ORDINAL_POSITION
+        """)
+        columns_data = cursor.fetchall()
+
+        # 2. Get primary keys
+        cursor.execute("""
+            SELECT
+                kcu.TABLE_NAME,
+                kcu.COLUMN_NAME
+            FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
+            INNER JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
+                ON tc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME
+            WHERE tc.CONSTRAINT_TYPE = 'PRIMARY KEY'
+                AND tc.TABLE_SCHEMA = 'dbo'
+        """)
+        pk_set = {(row[0], row[1]) for row in cursor.fetchall()}
+
+        # 3. Get foreign keys
+        cursor.execute("""
+            SELECT
+                fk_col.TABLE_NAME AS FK_Table,
+                fk_col.COLUMN_NAME AS FK_Column,
+                pk_col.TABLE_NAME AS PK_Table,
+                pk_col.COLUMN_NAME AS PK_Column
+            FROM INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS rc
+            INNER JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE fk_col
+                ON rc.CONSTRAINT_NAME = fk_col.CONSTRAINT_NAME
+            INNER JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE pk_col
+                ON rc.UNIQUE_CONSTRAINT_NAME = pk_col.CONSTRAINT_NAME
+        """)
+        fk_list = cursor.fetchall()
+
+        # 4. Get computed columns
+        cursor.execute("""
+            SELECT
+                OBJECT_NAME(object_id) AS TableName,
+                name AS ColumnName,
+                definition AS Expression
+            FROM sys.computed_columns
+        """)
+        computed = {(row[0], row[1]): row[2] for row in cursor.fetchall()}
+
+        # 5. Sample a few distinct values for key columns (helps LLM understand data)
+        sample_values = {}
+        for table_col in [("Orders", "Status"), ("Products", "Category")]:
+            try:
+                tbl, col = table_col
+                cursor.execute(f"SELECT DISTINCT [{col}] FROM dbo.[{tbl}]")
+                vals = [str(r[0]) for r in cursor.fetchall()]
+                if vals:
+                    sample_values[(tbl, col)] = vals
+            except Exception:
+                pass
+
+        # 6. Get row counts
+        row_counts = {}
+        cursor.execute("""
+            SELECT
+                t.name AS TableName,
+                SUM(p.rows) AS RowCount
+            FROM sys.tables t
+            INNER JOIN sys.partitions p ON t.object_id = p.object_id
+            WHERE p.index_id IN (0, 1)
+                AND t.schema_id = SCHEMA_ID('dbo')
+            GROUP BY t.name
+        """)
+        for row in cursor.fetchall():
+            row_counts[row[0]] = row[1]
+
+    finally:
+        conn.close()
+
+    # Build schema string
+    db_name = os.getenv("SQL_DATABASE", "SalesDB")
+    lines = [f"Database: {db_name}", ""]
+
+    # Group columns by table
+    tables: dict[str, list] = {}
+    for row in columns_data:
+        tbl = row[0]
+        if tbl not in tables:
+            tables[tbl] = []
+        tables[tbl].append(row)
+
+    relationships = []
+
+    for tbl, cols in sorted(tables.items()):
+        count = row_counts.get(tbl, "?")
+        lines.append(f"Table: {tbl}  ({count} rows)")
+
+        for col_row in cols:
+            _, col_name, dtype, char_len, num_prec, num_scale, nullable, default = col_row
+
+            # Format type
+            if char_len and char_len > 0:
+                type_str = f"{dtype.upper()}({char_len})"
+            elif num_prec and num_scale and num_scale > 0:
+                type_str = f"{dtype.upper()}({num_prec},{num_scale})"
+            else:
+                type_str = dtype.upper()
+
+            # Annotations
+            annotations = []
+            if (tbl, col_name) in pk_set:
+                annotations.append("PK")
+            if nullable == "NO" and (tbl, col_name) not in pk_set:
+                annotations.append("NOT NULL")
+            if (tbl, col_name) in computed:
+                annotations.append(f"computed: {computed[(tbl, col_name)]}")
+            if default:
+                annotations.append(f"default: {default}")
+
+            # Sample values
+            if (tbl, col_name) in sample_values:
+                vals = ", ".join(sample_values[(tbl, col_name)])
+                annotations.append(f"values: {vals}")
+
+            ann_str = f"  ({', '.join(annotations)})" if annotations else ""
+            lines.append(f"  - {col_name}  {type_str}{ann_str}")
+
+        lines.append("")
+
+    # Foreign key relationships
+    if fk_list:
+        lines.append("Relationships:")
+        for fk_row in fk_list:
+            fk_tbl, fk_col, pk_tbl, pk_col = fk_row
+            lines.append(f"  {fk_tbl}.{fk_col} -> {pk_tbl}.{pk_col}")
+            relationships.append(f"{fk_tbl}.{fk_col} -> {pk_tbl}.{pk_col}")
+        lines.append("")
+
+    schema_str = "\n".join(lines)
+    _schema_cache = schema_str
+    return schema_str
+
+
+def get_system_prompt() -> str:
+    """Build the system prompt with dynamically discovered schema."""
+    schema = discover_schema()
+    return f"""You are an expert SQL query generator for Microsoft SQL Server (Azure SQL).
+Given a natural language question, generate ONLY the T-SQL query — no explanations, no markdown.
+
+Rules:
+1. Use only the tables and columns defined in the schema below.
+2. Use T-SQL syntax (TOP instead of LIMIT, etc.).
+3. Always qualify column names with table aliases when joining.
+4. Use appropriate JOINs — prefer INNER JOIN unless LEFT JOIN is needed.
+5. For aggregations, include GROUP BY for all non-aggregated columns.
+6. Return ONLY the SQL query. No commentary, no code fences.
+7. Prices are in IDR (Indonesian Rupiah).
+
+Schema:
+{schema}
+"""
+
+
+SYNTHESIS_PROMPT = """You are a helpful data analyst assistant.
+Given a user question, the SQL query that was executed, and the query results,
+provide a clear, concise, natural language answer.
+
+Rules:
+1. Summarise the data — do not just dump raw rows.
+2. Format currency values in IDR with thousand separators.
+3. If no results were returned, say so clearly and suggest possible reasons.
+4. Be conversational but professional.
+5. If there are many rows, highlight key findings rather than listing all.
+"""
+
+
 def get_openai_client() -> AzureOpenAI:
     """Create an Azure OpenAI client using Entra ID (Managed Identity)."""
     credential = DefaultAzureCredential()
@@ -131,10 +264,11 @@ def get_openai_client() -> AzureOpenAI:
 
 def generate_sql(client: AzureOpenAI, question: str) -> str:
     """Stage 1: Convert natural language question to T-SQL."""
+    system_prompt = get_system_prompt()
     response = client.chat.completions.create(
         model=os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4o"),
         messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": question},
         ],
         temperature=0.0,
@@ -172,11 +306,10 @@ def synthesize_response(
     rows: list[tuple],
 ) -> str:
     """Stage 2: Convert SQL results to natural language answer."""
-    # Format results as a readable table
     if rows:
         result_str = " | ".join(columns) + "\n"
         result_str += "-" * len(result_str) + "\n"
-        for row in rows[:50]:  # Cap at 50 rows for context window
+        for row in rows[:50]:
             result_str += " | ".join(str(v) for v in row) + "\n"
         if len(rows) > 50:
             result_str += f"\n... and {len(rows) - 50} more rows."
@@ -203,7 +336,7 @@ def synthesize_response(
 
 def process_question(question: str) -> dict:
     """
-    End-to-end pipeline: question → SQL → execute → synthesise → answer.
+    End-to-end pipeline: question -> SQL -> execute -> synthesise -> answer.
 
     Returns:
         dict with keys: question, sql, columns, rows, answer, error
@@ -241,6 +374,12 @@ def process_question(question: str) -> dict:
     return result
 
 
+def reset_schema_cache():
+    """Clear the cached schema (useful if tables change)."""
+    global _schema_cache
+    _schema_cache = None
+
+
 # -----------------------------------------------------------
 # CLI test harness
 # -----------------------------------------------------------
@@ -252,12 +391,16 @@ if __name__ == "__main__":
     else:
         q = "Show me the top 5 customers by total order amount"
 
-    print(f"\n📝 Question: {q}\n")
+    print(f"\nDiscovering database schema...")
+    schema = discover_schema()
+    print(f"Schema discovered:\n{schema}\n")
+
+    print(f"Question: {q}\n")
     res = process_question(q)
 
     if res["error"]:
-        print(f"❌ {res['error']}")
+        print(f"Error: {res['error']}")
     else:
-        print(f"🔍 SQL:\n{res['sql']}\n")
-        print(f"📊 Results: {len(res['rows'])} rows")
-        print(f"\n💬 Answer:\n{res['answer']}")
+        print(f"SQL:\n{res['sql']}\n")
+        print(f"Results: {len(res['rows'])} rows")
+        print(f"\nAnswer:\n{res['answer']}")
