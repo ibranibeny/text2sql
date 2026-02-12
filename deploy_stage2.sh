@@ -23,7 +23,13 @@ set -euo pipefail
 # -----------------------------------------------------------
 RG_WORKSHOP="rg-text2sql-workshop"
 VM_NAME="vm-text2sql-frontend"
-NSG_NAME="nsg-text2sql"
+# Discover the NSG name dynamically (Azure auto-names it when creating a VM)
+NSG_NAME=$(az network nsg list --resource-group "$RG_WORKSHOP" --query "[0].name" -o tsv 2>/dev/null)
+if [ -z "$NSG_NAME" ]; then
+    echo "ERROR: No NSG found in resource group $RG_WORKSHOP"
+    exit 1
+fi
+echo "  Discovered NSG: $NSG_NAME"
 FASTAPI_PORT=8000
 
 # Generate random API key

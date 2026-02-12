@@ -5,7 +5,7 @@
     "description": "An Agentic AI REST API that converts natural language questions into T-SQL queries against an Azure SQL Database (SalesDB) containing Indonesian sales data. Uses Azure OpenAI GPT-4o for query generation and result synthesis.",
     "version": "2.0.0"
   },
-  "host": "REPLACE_WITH_VM_IP:8000",
+  "host": "70.153.146.24:8000",
   "basePath": "/",
   "schemes": ["http"],
   "securityDefinitions": {
