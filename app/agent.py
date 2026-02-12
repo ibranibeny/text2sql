@@ -139,7 +139,7 @@ def discover_schema() -> str:
         cursor.execute("""
             SELECT
                 t.name AS TableName,
-                SUM(p.rows) AS RowCount
+                SUM(p.rows) AS Cnt
             FROM sys.tables t
             INNER JOIN sys.partitions p ON t.object_id = p.object_id
             WHERE p.index_id IN (0, 1)
