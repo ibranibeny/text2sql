@@ -115,7 +115,8 @@ if ! command -v sqlcmd &> /dev/null; then
     echo 'export PATH="$PATH:/opt/mssql-tools18/bin"' >> ~/.bashrc
 fi
 
-# Execute seed script
+# Execute seed script (strip Windows line endings first)
+sed -i 's/\r$//' "$APP_DIR/seed_data.sql"
 /opt/mssql-tools18/bin/sqlcmd \
     -S "$SQL_SERVER" \
     -d "$SQL_DATABASE" \
