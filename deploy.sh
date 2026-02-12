@@ -212,6 +212,16 @@ main() {
         -o none
     ok "AI Services account created: $AI_ACCOUNT_NAME"
 
+    log "Enabling key-based authentication..."
+    az resource update \
+        --resource-group "$RG_AI_NAME" \
+        --name "$AI_ACCOUNT_NAME" \
+        --resource-type "Microsoft.CognitiveServices/accounts" \
+        --set properties.disableLocalAuth=false \
+        -o none 2>/dev/null \
+        && ok "Key auth enabled." \
+        || warn "Could not enable key auth (may be blocked by policy — see below)."
+
     log "Deploying model: $AI_MODEL_NAME ($AI_MODEL_VERSION)..."
     az cognitiveservices account deployment create \
         --name "$AI_ACCOUNT_NAME" \
