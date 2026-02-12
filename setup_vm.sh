@@ -36,14 +36,14 @@ echo "  ✓ System packages installed."
 # 2. Microsoft ODBC Driver 18
 # -----------------------------------------------------------
 echo "[2/7] Installing ODBC Driver 18 for SQL Server..."
-if ! odbcinst -q -d | grep -q "ODBC Driver 18 for SQL Server"; then
+if ! dpkg -l msodbcsql18 &> /dev/null; then
     curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | \
-        sudo gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg
+        sudo gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg 2>/dev/null
 
     # Detect Ubuntu version
     UBUNTU_VERSION=$(lsb_release -rs)
-    echo "deb [arch=amd64 signed-by=/usr/share/keyrings/microsoft-prod.gpg] \
-https://packages.microsoft.com/ubuntu/${UBUNTU_VERSION}/prod ${$(lsb_release -cs)} main" | \
+    UBUNTU_CODENAME=$(lsb_release -cs)
+    echo "deb [arch=amd64 signed-by=/usr/share/keyrings/microsoft-prod.gpg] https://packages.microsoft.com/ubuntu/${UBUNTU_VERSION}/prod ${UBUNTU_CODENAME} main" | \
         sudo tee /etc/apt/sources.list.d/mssql-release.list > /dev/null
 
     sudo apt-get update -qq
