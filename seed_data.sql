@@ -18,6 +18,7 @@ IF OBJECT_ID('dbo.OrderItems', 'U') IS NOT NULL DROP TABLE dbo.OrderItems;
 IF OBJECT_ID('dbo.Orders', 'U') IS NOT NULL DROP TABLE dbo.Orders;
 IF OBJECT_ID('dbo.Products', 'U') IS NOT NULL DROP TABLE dbo.Products;
 IF OBJECT_ID('dbo.Customers', 'U') IS NOT NULL DROP TABLE dbo.Customers;
+GO
 
 CREATE TABLE dbo.Customers (
     CustomerID   INT           PRIMARY KEY,
@@ -28,6 +29,7 @@ CREATE TABLE dbo.Customers (
     Country      NVARCHAR(50)  NOT NULL DEFAULT 'Indonesia',
     JoinDate     DATE          NOT NULL
 );
+GO
 
 INSERT INTO dbo.Customers (CustomerID, FirstName, LastName, Email, City, Country, JoinDate) VALUES
 (1,  'Adi',     'Pratama',   'adi.pratama@mail.com',    'Jakarta',    'Indonesia', '2023-01-15'),
@@ -40,6 +42,7 @@ INSERT INTO dbo.Customers (CustomerID, FirstName, LastName, Email, City, Country
 (8,  'Rina',    'Fitriani',  'rina.fitriani@mail.com',  'Denpasar',   'Indonesia', '2023-08-30'),
 (9,  'Hendra',  'Wijaya',    'hendra.wijaya@mail.com',  'Palembang',  'Indonesia', '2023-09-14'),
 (10, 'Maya',    'Kusuma',    'maya.kusuma@mail.com',     'Malang',     'Indonesia', '2023-10-01');
+GO
 
 -- -----------------------------------------------------------
 -- Table: Products
@@ -51,6 +54,7 @@ CREATE TABLE dbo.Products (
     Price        DECIMAL(10,2)  NOT NULL,
     Stock        INT            NOT NULL DEFAULT 0
 );
+GO
 
 INSERT INTO dbo.Products (ProductID, ProductName, Category, Price, Stock) VALUES
 (1,  'Laptop ProBook 14',    'Electronics', 12500000.00,  50),
@@ -63,6 +67,7 @@ INSERT INTO dbo.Products (ProductID, ProductName, Category, Price, Stock) VALUES
 (8,  'Notebook A5 Pack-5',   'Stationery',    75000.00, 500),
 (9,  'Ballpoint Pen Box-12', 'Stationery',    48000.00, 300),
 (10, 'Webcam HD 1080p',      'Electronics',   650000.00,  80);
+GO
 
 -- -----------------------------------------------------------
 -- Table: Orders
@@ -74,6 +79,7 @@ CREATE TABLE dbo.Orders (
     TotalAmount  DECIMAL(12,2)  NOT NULL,
     Status       NVARCHAR(20)   NOT NULL DEFAULT 'Completed'
 );
+GO
 
 INSERT INTO dbo.Orders (OrderID, CustomerID, OrderDate, TotalAmount, Status) VALUES
 (1001, 1,  '2024-01-10', 13200000.00, 'Completed'),
@@ -89,6 +95,7 @@ INSERT INTO dbo.Orders (OrderID, CustomerID, OrderDate, TotalAmount, Status) VAL
 (1011, 9,  '2024-06-01',  4800000.00, 'Completed'),
 (1012, 10, '2024-06-15',   650000.00, 'Completed'),
 (1013, 3,  '2024-07-01', 16300000.00, 'Completed');
+GO
 
 -- -----------------------------------------------------------
 -- Table: OrderItems
@@ -101,6 +108,7 @@ CREATE TABLE dbo.OrderItems (
     UnitPrice    DECIMAL(10,2)  NOT NULL,
     LineTotal    AS (Quantity * UnitPrice) PERSISTED
 );
+GO
 
 INSERT INTO dbo.OrderItems (OrderItemID, OrderID, ProductID, Quantity, UnitPrice) VALUES
 (1,  1001, 1, 1,  12500000.00),
@@ -125,16 +133,19 @@ INSERT INTO dbo.OrderItems (OrderItemID, OrderID, ProductID, Quantity, UnitPrice
 (20, 1013, 4, 1,    850000.00),
 (21, 1013, 5, 1,   5500000.00),
 (22, 1013, 3, 2,    450000.00);
+GO
 
 -- -----------------------------------------------------------
 -- Verification
 -- -----------------------------------------------------------
-SELECT 'Customers' AS TableName, COUNT(*) AS RowCount FROM dbo.Customers
+SELECT 'Customers' AS TableName, COUNT(*) AS [RowCount] FROM dbo.Customers
 UNION ALL
 SELECT 'Products',  COUNT(*) FROM dbo.Products
 UNION ALL
 SELECT 'Orders',    COUNT(*) FROM dbo.Orders
 UNION ALL
 SELECT 'OrderItems', COUNT(*) FROM dbo.OrderItems;
+GO
 
-PRINT '✓ SalesDB seed data loaded successfully.';
+PRINT 'SalesDB seed data loaded successfully.';
+GO
