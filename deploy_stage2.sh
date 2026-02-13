@@ -119,7 +119,7 @@ echo "  API Key: ${API_KEY}"
 echo ""
 
 # -----------------------------------------------------------
-# Phase 5: Create and start systemd services
+# Phase 5: Create and start systemd service
 # -----------------------------------------------------------
 echo "[5/7] Setting up systemd services (FastAPI + Streamlit)..."
 
@@ -148,7 +148,7 @@ RestartSec=5
 WantedBy=multi-user.target
 UNIT
 
-# Create Streamlit service (port 8501)
+# Create Streamlit service (port 8501) — keep Stage 1 running too
 sudo tee /etc/systemd/system/text2sql-streamlit.service > /dev/null << UNIT2
 [Unit]
 Description=Text2SQL Streamlit Frontend
@@ -185,7 +185,7 @@ echo "  Services started: text2sql-api + text2sql-streamlit."
 echo ""
 
 # -----------------------------------------------------------
-# Phase 6: Open ports on NSG
+# Phase 6: Open port 8000 on NSG
 # -----------------------------------------------------------
 echo "[6/7] Opening ports ${FASTAPI_PORT} and 8501 on NSG..."
 
