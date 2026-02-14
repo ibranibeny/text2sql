@@ -3,15 +3,17 @@
 ## Overview
 
 Stage 4 exposes the Text-to-SQL agent as a **Model Context Protocol (MCP)** server
-using **Streamable HTTP** transport over **HTTPS**. This enables **Microsoft Copilot Studio** to
-discover and invoke the agent's tools automatically via a secure TLS connection.
+using **Streamable HTTP** transport. It runs on **two ports**:
+- **HTTPS** (port 8003) — for **Microsoft Copilot Studio** via secure TLS connection
+- **HTTP** (port 8004) — for **VS Code** and local MCP clients (avoids self-signed cert issues)
 
 | Layer | Port | Protocol | Purpose |
-|-------|------|----------|---------|
+|-------|------|----------|----------|
 | Streamlit | 8501 | HTTP | Chat UI (Stage 1) |
 | FastAPI | 8000 | REST | Copilot Studio connector (Stage 2) |
 | A2A | 8002 | JSON-RPC | Agent-to-Agent (Stage 3) |
-| **MCP** | **8003** | **MCP/Streamable HTTP (HTTPS)** | **Copilot Studio MCP (Stage 4)** |
+| **MCP (HTTPS)** | **8003** | **MCP/Streamable HTTP (HTTPS)** | **Copilot Studio MCP (Stage 4)** |
+| **MCP (HTTP)** | **8004** | **MCP/Streamable HTTP** | **VS Code / local clients (Stage 4)** |
 
 ## Architecture
 
@@ -20,12 +22,13 @@ discover and invoke the agent's tools automatically via a secure TLS connection.
 │  Microsoft Copilot   │  ────────────────────────────►  │    MCP Server       │
 │  Studio              │  POST /mcp (JSON-RPC 2.0/TLS)  │    (port 8003)      │
 │                      │  ◄────────────────────────────  │                     │
-└──────────────────────┘      JSON / SSE responses       │  ┌───────────────┐  │
-                                                         │  │  agent.py     │  │
-                                                         │  │  ┌─────────┐  │  │
-                                                         │  │  │ GPT-4o  │  │  │
-                                                         │  │  │Azure SQL│  │  │
-                                                         │  │  └─────────┘  │  │
+└──────────────────────┘      JSON / SSE responses       │                     │
+                                                         │  ┌───────────────┐  │
+┌──────────────────────┐      MCP Streamable HTTP        │  │  agent.py     │  │
+│  VS Code / Local     │  ────────────────────────────►  │  │  ┌─────────┐  │  │
+│  MCP Clients         │  POST /mcp (JSON-RPC 2.0)       │  │  │ GPT-4o  │  │  │
+│                      │  ◄────────────────────────────  │  │  │Azure SQL│  │  │
+└──────────────────────┘      (port 8004)                │  │  └─────────┘  │  │
                                                          │  └───────────────┘  │
                                                          └─────────────────────┘
 ```
@@ -68,10 +71,13 @@ chmod +x deploy_stage4.sh
 
 ## Test with curl
 
+> **Tip**: Use port **8004** (HTTP) for local testing and VS Code. Use port **8003** (HTTPS with `-k`) for Copilot Studio.
+
 ### 1. Initialize (MCP handshake)
 
 ```bash
-curl -k -X POST https://<VM_IP>:8003/mcp \
+# HTTP (VS Code / local clients)
+curl -X POST http://<VM_IP>:8004/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{
@@ -84,6 +90,12 @@ curl -k -X POST https://<VM_IP>:8003/mcp \
       "clientInfo": {"name": "test-client", "version": "1.0"}
     }
   }'
+
+# HTTPS (Copilot Studio — use -k for self-signed cert)
+curl -k -X POST https://<VM_IP>:8003/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{ ... same payload ... }'
 ```
 
 Expected response:
@@ -102,7 +114,7 @@ Expected response:
 ### 2. List tools
 
 ```bash
-curl -k -X POST https://<VM_IP>:8003/mcp \
+curl -X POST http://<VM_IP>:8004/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}'
@@ -111,7 +123,7 @@ curl -k -X POST https://<VM_IP>:8003/mcp \
 ### 3. Call a tool
 
 ```bash
-curl -k -X POST https://<VM_IP>:8003/mcp \
+curl -X POST http://<VM_IP>:8004/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{
@@ -124,6 +136,23 @@ curl -k -X POST https://<VM_IP>:8003/mcp \
     }
   }'
 ```
+
+## Connect from VS Code
+
+Add the following to `.vscode/mcp.json` in your workspace:
+
+```json
+{
+  "servers": {
+    "Text2SQL": {
+      "type": "http",
+      "url": "http://<VM_IP>:8004/mcp"
+    }
+  }
+}
+```
+
+VS Code uses the HTTP endpoint (port 8004) to avoid self-signed certificate issues.
 
 ## Connect from Microsoft Copilot Studio
 

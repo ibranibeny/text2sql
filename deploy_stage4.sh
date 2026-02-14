@@ -199,6 +199,32 @@ if [ -z "$EXISTING" ]; then
 else
     echo "  NSG rule already exists: AllowMCP."
 fi
+
+# Also open HTTP port for VS Code / local MCP clients
+MCP_HTTP_PORT=8004
+EXISTING_HTTP=$(az network nsg rule show \
+    --resource-group "$RG_WORKSHOP" \
+    --nsg-name "$NSG_NAME" \
+    --name AllowMCPHTTP \
+    --query name -o tsv 2>/dev/null) || true
+
+if [ -z "$EXISTING_HTTP" ]; then
+    az network nsg rule create \
+        --resource-group "$RG_WORKSHOP" \
+        --nsg-name "$NSG_NAME" \
+        --name AllowMCPHTTP \
+        --priority 1005 \
+        --destination-port-ranges "$MCP_HTTP_PORT" \
+        --access Allow \
+        --protocol Tcp \
+        --direction Inbound \
+        --source-address-prefixes "*" \
+        --destination-address-prefixes "*" \
+        --output none 2>/dev/null
+    echo "  NSG rule created: AllowMCPHTTP (port ${MCP_HTTP_PORT})."
+else
+    echo "  NSG rule already exists: AllowMCPHTTP."
+fi
 echo ""
 
 # -----------------------------------------------------------
@@ -207,7 +233,7 @@ echo ""
 echo "[7/7] Verifying MCP server..."
 sleep 5
 
-# Test health via the MCP endpoint (POST initialize)
+# Test health via the MCP endpoint (POST initialize) — HTTPS
 HTTP_CODE=$(curl -sk -o /dev/null -w "%{http_code}" \
     -X POST "https://${VM_IP}:${MCP_PORT}/mcp" \
     -H "Content-Type: application/json" \
@@ -216,10 +242,23 @@ HTTP_CODE=$(curl -sk -o /dev/null -w "%{http_code}" \
     2>/dev/null) || HTTP_CODE="000"
 
 if [ "$HTTP_CODE" = "200" ]; then
-    echo "  MCP initialize: OK (HTTP 200)"
+    echo "  MCP initialize (HTTPS :${MCP_PORT}): OK (HTTP 200)"
 else
-    echo "  MCP initialize: HTTP ${HTTP_CODE} (may need a few seconds to start)"
-    echo "  Retry manually with the curl command below."
+    echo "  MCP initialize (HTTPS :${MCP_PORT}): HTTP ${HTTP_CODE} (may need a few seconds to start)"
+fi
+
+# Test HTTP port
+HTTP_CODE2=$(curl -s -o /dev/null -w "%{http_code}" \
+    -X POST "http://${VM_IP}:${MCP_HTTP_PORT}/mcp" \
+    -H "Content-Type: application/json" \
+    -H "Accept: application/json, text/event-stream" \
+    -d '{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {"name": "test", "version": "1.0"}}}' \
+    2>/dev/null) || HTTP_CODE2="000"
+
+if [ "$HTTP_CODE2" = "200" ]; then
+    echo "  MCP initialize (HTTP  :${MCP_HTTP_PORT}): OK (HTTP 200)"
+else
+    echo "  MCP initialize (HTTP  :${MCP_HTTP_PORT}): HTTP ${HTTP_CODE2} (may need a few seconds to start)"
 fi
 
 echo ""
@@ -227,14 +266,17 @@ echo "============================================================"
 echo " Stage 4 Deployment Complete"
 echo "============================================================"
 echo ""
-echo " MCP Server:  https://${VM_IP}:${MCP_PORT}/mcp"
+echo " MCP Server (dual transport):"
+echo "   HTTPS: https://${VM_IP}:${MCP_PORT}/mcp  (Copilot Studio, use -k for self-signed cert)"
+echo "   HTTP:  http://${VM_IP}:${MCP_HTTP_PORT}/mcp   (VS Code / local MCP clients)"
 echo " Transport:   Streamable HTTP (JSON-RPC 2.0)"
 echo ""
 echo " All services:"
-echo "   Streamlit:   http://${VM_IP}:8501       (Chat UI)"
-echo "   FastAPI:     http://${VM_IP}:8000       (REST API)"
-echo "   A2A:         http://${VM_IP}:8002       (Agent-to-Agent)"
-echo "   MCP:         https://${VM_IP}:${MCP_PORT}/mcp  (Model Context Protocol)"
+echo "   Streamlit:   http://${VM_IP}:8501         (Chat UI)"
+echo "   FastAPI:     http://${VM_IP}:8000         (REST API)"
+echo "   A2A:         http://${VM_IP}:8002         (Agent-to-Agent)"
+echo "   MCP HTTPS:   https://${VM_IP}:${MCP_PORT}/mcp  (Model Context Protocol)"
+echo "   MCP HTTP:    http://${VM_IP}:${MCP_HTTP_PORT}/mcp   (Model Context Protocol)"
 echo ""
 echo " MCP Tools exposed:"
 echo "   - ask_database         Ask NL question, get SQL + answer"
@@ -247,21 +289,38 @@ echo "   2. Server URL: https://${VM_IP}:${MCP_PORT}/mcp"
 echo "   3. Auth: None (or API Key with header X-API-Key)"
 echo "   4. Select Create → Add to agent"
 echo ""
+echo " ─── Connect from VS Code ───"
+echo "   Add to .vscode/mcp.json:"
+echo '   {'
+echo '     "servers": {'
+echo '       "Text2SQL": {'
+echo '         "type": "http",'
+echo "         \"url\": \"http://${VM_IP}:${MCP_HTTP_PORT}/mcp\""
+echo '       }'
+echo '     }'
+echo '   }'
+echo ""
 echo " ─── Test with curl ───"
-echo "   # Initialize (use -k to accept self-signed cert):"
+echo "   # Initialize (HTTPS, use -k for self-signed cert):"
 echo "   curl -k -X POST https://${VM_IP}:${MCP_PORT}/mcp \\"
 echo "     -H 'Content-Type: application/json' \\"
 echo "     -H 'Accept: application/json, text/event-stream' \\"
 echo "     -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-03-26\",\"capabilities\":{},\"clientInfo\":{\"name\":\"test\",\"version\":\"1.0\"}}}'"
 echo ""
+echo "   # Initialize (HTTP, no cert needed):"
+echo "   curl -X POST http://${VM_IP}:${MCP_HTTP_PORT}/mcp \\"
+echo "     -H 'Content-Type: application/json' \\"
+echo "     -H 'Accept: application/json, text/event-stream' \\"
+echo "     -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-03-26\",\"capabilities\":{},\"clientInfo\":{\"name\":\"test\",\"version\":\"1.0\"}}}'"
+echo ""
 echo "   # List tools:"
-echo "   curl -k -X POST https://${VM_IP}:${MCP_PORT}/mcp \\"
+echo "   curl -X POST http://${VM_IP}:${MCP_HTTP_PORT}/mcp \\"
 echo "     -H 'Content-Type: application/json' \\"
 echo "     -H 'Accept: application/json, text/event-stream' \\"
 echo "     -d '{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}'"
 echo ""
 echo "   # Call ask_database tool:"
-echo "   curl -k -X POST https://${VM_IP}:${MCP_PORT}/mcp \\"
+echo "   curl -X POST http://${VM_IP}:${MCP_HTTP_PORT}/mcp \\"
 echo "     -H 'Content-Type: application/json' \\"
 echo "     -H 'Accept: application/json, text/event-stream' \\"
 echo "     -d '{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"ask_database\",\"arguments\":{\"question\":\"How many products are there?\"}}}'"

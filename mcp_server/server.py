@@ -49,6 +49,7 @@ logging.basicConfig(
 logger = logging.getLogger("text2sql-mcp")
 
 PORT = int(os.getenv("MCP_PORT", "8003"))
+HTTP_PORT = int(os.getenv("MCP_HTTP_PORT", "8004"))  # Plain HTTP port for local MCP clients
 
 # ---------------------------------------------------------------------------
 # HTTPS / SSL Configuration
@@ -290,20 +291,58 @@ def salesdb_schema() -> str:
 # ---------------------------------------------------------------------------
 # Run
 # ---------------------------------------------------------------------------
+def _create_mcp_instance(name_suffix="", port=PORT):
+    """Create a fresh FastMCP instance with all tools/resources registered."""
+    instance = FastMCP(
+        "Text2SQL Database Assistant",
+        instructions=(
+            "A Text-to-SQL agent for the SalesDB database on Azure SQL. "
+            "It converts natural language questions about sales data into T-SQL queries, "
+            "executes them, and returns natural language answers. "
+            "The database contains Products, Customers, Orders, and OrderItems tables."
+        ),
+        host="0.0.0.0",
+        port=port,
+        stateless_http=True,
+    )
+
+    # Register tools
+    instance.tool()(ask_database)
+    instance.tool()(get_database_schema)
+    instance.tool()(run_sql_query)
+
+    # Register resources
+    instance.resource("schema://salesdb")(salesdb_schema)
+
+    return instance
+
+
 if __name__ == "__main__":
     certfile, keyfile = _resolve_ssl_paths()
 
     if certfile and keyfile:
-        scheme = "https"
-        logger.info(f"Starting Text2SQL MCP server on port {PORT} (HTTPS)")
-        logger.info(f"MCP endpoint: https://0.0.0.0:{PORT}/mcp")
-        logger.info(f"SSL cert: {certfile}")
-
         import uvicorn
+        import threading
 
-        app = mcp.streamable_http_app()
+        # Start plain HTTP server on MCP_HTTP_PORT for local clients (VS Code)
+        def run_http():
+            logger.info(f"Starting HTTP listener on port {HTTP_PORT} (for local MCP clients)")
+            logger.info(f"MCP endpoint (HTTP): http://0.0.0.0:{HTTP_PORT}/mcp")
+            mcp_http = _create_mcp_instance("http", HTTP_PORT)
+            http_app = mcp_http.streamable_http_app()
+            uvicorn.run(http_app, host="0.0.0.0", port=HTTP_PORT, log_level="info")
+
+        http_thread = threading.Thread(target=run_http, daemon=True)
+        http_thread.start()
+
+        # Start HTTPS server on MCP_PORT (primary)
+        logger.info(f"Starting Text2SQL MCP server on port {PORT} (HTTPS)")
+        logger.info(f"MCP endpoint (HTTPS): https://0.0.0.0:{PORT}/mcp")
+        logger.info(f"SSL cert: {certfile}")
+        mcp_https = _create_mcp_instance("https", PORT)
+        https_app = mcp_https.streamable_http_app()
         uvicorn.run(
-            app,
+            https_app,
             host="0.0.0.0",
             port=PORT,
             ssl_certfile=certfile,

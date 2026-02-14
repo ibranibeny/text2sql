@@ -59,7 +59,8 @@ The core AI pipeline follows a two-stage LLM approach:
 │  (Browser /  │ <────────────── │  Streamlit  :8501  (Stage 1)             │
 │   Copilot /  │    Response     │  FastAPI    :8000  (Stage 2)             │
 │   GitHub)    │                 │  A2A Server :8002  (Stage 3)             │
-│              │                 │  MCP Server :8003  (Stage 4)             │
+│              │                 │  MCP Server :8003  HTTPS (Stage 4)       │
+│              │                 │  MCP Server :8004  HTTP  (Stage 4)       │
 └──────────────┘                 └──────────────┬──────────────┬────────────┘
                                                 │              │
                                      SDK / REST │              │ Generated SQL
@@ -337,12 +338,13 @@ chmod +x deploy_stage4.sh
 | Component | Details |
 |---|---|
 | MCP Server | `mcp_server/server.py` using FastMCP SDK |
-| Port | 8003 |
-| Protocol | MCP Streamable HTTP over **HTTPS** (JSON-RPC 2.0) |
+| HTTPS Port | 8003 (Copilot Studio / production clients) |
+| HTTP Port | 8004 (VS Code / local MCP clients) |
+| Protocol | MCP Streamable HTTP (JSON-RPC 2.0) |
 | Endpoint | `POST /mcp` |
 | TLS | Auto-generated self-signed certificate (or provide custom via env vars) |
 | Systemd Service | `text2sql-mcp` |
-| NSG Rule | AllowMCP (port 8003, inbound) |
+| NSG Rules | AllowMCP (port 8003), AllowMCPHTTP (port 8004) |
 
 **MCP Tools Exposed**:
 
@@ -366,7 +368,7 @@ chmod +x deploy_stage4.sh
 3. **Create Symlinks** -- Links `agent.py` and `.env` from the parent directory.
 4. **Install MCP SDK** -- Installs the `mcp[cli]>=1.5.0`, `cryptography`, and `uvicorn` Python packages.
 5. **Create Systemd Service** -- Configures and starts `text2sql-mcp` as a managed service.
-6. **Open Port** -- Creates an NSG rule to allow inbound traffic on port 8003.
+6. **Open Ports** -- Creates NSG rules to allow inbound traffic on ports 8003 (HTTPS) and 8004 (HTTP).
 7. **Verify** -- Tests the MCP handshake and tool listing.
 
 **HTTPS / SSL Configuration**:
@@ -375,15 +377,16 @@ The MCP server runs over **HTTPS** by default. On first startup it auto-generate
 
 | Variable | Default | Description |
 |---|---|---|
-| `MCP_ENABLE_HTTPS` | `true` | Set to `false` to fall back to plain HTTP |
+| `MCP_ENABLE_HTTPS` | `true` | Set to `false` to disable HTTPS (HTTP-only on port 8003) |
+| `MCP_HTTP_PORT` | `8004` | Plain HTTP port for VS Code / local MCP clients |
 | `MCP_SSL_CERTFILE` | *(auto-generated)* | Path to a PEM certificate file |
 | `MCP_SSL_KEYFILE` | *(auto-generated)* | Path to a PEM private key file |
 
-**Testing with curl** (use `-k` to accept the self-signed certificate):
+**Testing with curl**:
 
 ```bash
-# MCP Initialize Handshake (HTTPS)
-curl -k -X POST https://<VM_IP>:8003/mcp \
+# MCP Initialize Handshake (HTTP — VS Code / local clients)
+curl -X POST http://<VM_IP>:8004/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{
@@ -396,6 +399,25 @@ curl -k -X POST https://<VM_IP>:8003/mcp \
       "clientInfo": {"name": "test-client", "version": "1.0"}
     }
   }'
+
+# MCP Initialize Handshake (HTTPS — use -k for self-signed cert)
+curl -k -X POST https://<VM_IP>:8003/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{ ... same payload ... }'
+```
+
+**VS Code MCP Configuration** (`.vscode/mcp.json`):
+
+```json
+{
+  "servers": {
+    "Text2SQL": {
+      "type": "http",
+      "url": "http://<VM_IP>:8004/mcp"
+    }
+  }
+}
 ```
 
 ---
@@ -409,7 +431,8 @@ After all four stages are deployed, the following services run concurrently on t
 | 8501 | Streamlit | HTTP | Stage 1 | Web Browser |
 | 8000 | FastAPI | REST / HTTP | Stage 2 | Microsoft Copilot Studio |
 | 8002 | A2A Server | JSON-RPC 2.0 | Stage 3 | GitHub Copilot |
-| 8003 | MCP Server | MCP Streamable **HTTPS** | Stage 4 | Microsoft Copilot Studio |
+| 8003 | MCP Server (HTTPS) | MCP Streamable **HTTPS** | Stage 4 | Microsoft Copilot Studio |
+| 8004 | MCP Server (HTTP) | MCP Streamable HTTP | Stage 4 | VS Code / local clients |
 
 All services are managed by `systemd` and configured to restart automatically on failure.
 
@@ -423,7 +446,7 @@ All services are managed by `systemd` and configured to restart automatically on
 | Azure VM to Azure SQL Database | SQL Authentication | Username and password stored in `.env` |
 | External Client to FastAPI (Stage 2) | API Key | `X-API-Key` header, 256-bit random key |
 | External Client to A2A (Stage 3) | API Key (optional) | `X-API-Key` header, same key as Stage 2 |
-| External Client to MCP (Stage 4) | None | HTTPS with self-signed certificate (TLS 1.2+) |
+| External Client to MCP (Stage 4) | None | HTTPS (:8003) with self-signed cert; plain HTTP (:8004) for VS Code |
 
 ---
 
