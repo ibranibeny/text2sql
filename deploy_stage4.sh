@@ -119,7 +119,7 @@ az vm run-command invoke \
     --scripts '#!/bin/bash
 cd /home/azureuser/text2sql
 . venv/bin/activate
-pip install --quiet "mcp[cli]>=1.5.0" 2>&1 | tail -5
+pip install --quiet "mcp[cli]>=1.5.0" cryptography 2>&1 | tail -5
 echo "Verify:"
 python3 -c "import mcp; print(f\"mcp {mcp.__version__ if hasattr(mcp, '__version__') else 'OK'}\")"
 python3 -c "from mcp.server.fastmcp import FastMCP; print(\"FastMCP import OK\")"
@@ -151,6 +151,7 @@ User=azureuser
 WorkingDirectory=/home/azureuser/text2sql/mcp_server
 EnvironmentFile=/home/azureuser/text2sql/.env
 Environment=MCP_PORT=8003
+Environment=MCP_ENABLE_HTTPS=true
 ExecStart=/home/azureuser/text2sql/venv/bin/python3 server.py
 Restart=always
 RestartSec=5
@@ -207,8 +208,8 @@ echo "[7/7] Verifying MCP server..."
 sleep 5
 
 # Test health via the MCP endpoint (POST initialize)
-HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-    -X POST "http://${VM_IP}:${MCP_PORT}/mcp" \
+HTTP_CODE=$(curl -sk -o /dev/null -w "%{http_code}" \
+    -X POST "https://${VM_IP}:${MCP_PORT}/mcp" \
     -H "Content-Type: application/json" \
     -H "Accept: application/json, text/event-stream" \
     -d '{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {"name": "test", "version": "1.0"}}}' \
@@ -226,14 +227,14 @@ echo "============================================================"
 echo " Stage 4 Deployment Complete"
 echo "============================================================"
 echo ""
-echo " MCP Server:  http://${VM_IP}:${MCP_PORT}/mcp"
+echo " MCP Server:  https://${VM_IP}:${MCP_PORT}/mcp"
 echo " Transport:   Streamable HTTP (JSON-RPC 2.0)"
 echo ""
 echo " All services:"
 echo "   Streamlit:   http://${VM_IP}:8501       (Chat UI)"
 echo "   FastAPI:     http://${VM_IP}:8000       (REST API)"
 echo "   A2A:         http://${VM_IP}:8002       (Agent-to-Agent)"
-echo "   MCP:         http://${VM_IP}:${MCP_PORT}/mcp  (Model Context Protocol)"
+echo "   MCP:         https://${VM_IP}:${MCP_PORT}/mcp  (Model Context Protocol)"
 echo ""
 echo " MCP Tools exposed:"
 echo "   - ask_database         Ask NL question, get SQL + answer"
@@ -242,25 +243,25 @@ echo "   - run_sql_query        Execute raw T-SQL query"
 echo ""
 echo " ─── Connect from Copilot Studio ───"
 echo "   1. Go to Tools → Add a tool → New tool → Model Context Protocol"
-echo "   2. Server URL: http://${VM_IP}:${MCP_PORT}/mcp"
+echo "   2. Server URL: https://${VM_IP}:${MCP_PORT}/mcp"
 echo "   3. Auth: None (or API Key with header X-API-Key)"
 echo "   4. Select Create → Add to agent"
 echo ""
 echo " ─── Test with curl ───"
-echo "   # Initialize:"
-echo "   curl -X POST http://${VM_IP}:${MCP_PORT}/mcp \\"
+echo "   # Initialize (use -k to accept self-signed cert):"
+echo "   curl -k -X POST https://${VM_IP}:${MCP_PORT}/mcp \\"
 echo "     -H 'Content-Type: application/json' \\"
 echo "     -H 'Accept: application/json, text/event-stream' \\"
 echo "     -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-03-26\",\"capabilities\":{},\"clientInfo\":{\"name\":\"test\",\"version\":\"1.0\"}}}'"
 echo ""
 echo "   # List tools:"
-echo "   curl -X POST http://${VM_IP}:${MCP_PORT}/mcp \\"
+echo "   curl -k -X POST https://${VM_IP}:${MCP_PORT}/mcp \\"
 echo "     -H 'Content-Type: application/json' \\"
 echo "     -H 'Accept: application/json, text/event-stream' \\"
 echo "     -d '{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}'"
 echo ""
 echo "   # Call ask_database tool:"
-echo "   curl -X POST http://${VM_IP}:${MCP_PORT}/mcp \\"
+echo "   curl -k -X POST https://${VM_IP}:${MCP_PORT}/mcp \\"
 echo "     -H 'Content-Type: application/json' \\"
 echo "     -H 'Accept: application/json, text/event-stream' \\"
 echo "     -d '{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"ask_database\",\"arguments\":{\"question\":\"How many products are there?\"}}}'"

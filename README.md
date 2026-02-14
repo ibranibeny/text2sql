@@ -110,7 +110,7 @@ Text2SQL/
 │   └── models.py              # A2A data models (AgentCard, Task, Message)
 │
 ├── mcp_server/
-│   └── server.py              # MCP server with Streamable HTTP transport (Stage 4)
+│   └── server.py              # MCP server with HTTPS + Streamable HTTP transport (Stage 4)
 │
 ├── WORKSHOP_TASKLIST.md        # Complete workshop implementation guide
 ├── WORKSHOP_STAGE2_COPILOT.md  # Stage 2 detailed instructions
@@ -338,8 +338,9 @@ chmod +x deploy_stage4.sh
 |---|---|
 | MCP Server | `mcp_server/server.py` using FastMCP SDK |
 | Port | 8003 |
-| Protocol | MCP Streamable HTTP (JSON-RPC 2.0) |
+| Protocol | MCP Streamable HTTP over **HTTPS** (JSON-RPC 2.0) |
 | Endpoint | `POST /mcp` |
+| TLS | Auto-generated self-signed certificate (or provide custom via env vars) |
 | Systemd Service | `text2sql-mcp` |
 | NSG Rule | AllowMCP (port 8003, inbound) |
 
@@ -363,16 +364,26 @@ chmod +x deploy_stage4.sh
 1. **Verify Stage 1** -- Confirms the VM exists and retrieves its public IP.
 2. **Upload server.py** -- Copies the MCP server script to the VM.
 3. **Create Symlinks** -- Links `agent.py` and `.env` from the parent directory.
-4. **Install MCP SDK** -- Installs the `mcp[cli]>=1.5.0` Python package.
+4. **Install MCP SDK** -- Installs the `mcp[cli]>=1.5.0`, `cryptography`, and `uvicorn` Python packages.
 5. **Create Systemd Service** -- Configures and starts `text2sql-mcp` as a managed service.
 6. **Open Port** -- Creates an NSG rule to allow inbound traffic on port 8003.
 7. **Verify** -- Tests the MCP handshake and tool listing.
 
-**Testing with curl**:
+**HTTPS / SSL Configuration**:
+
+The MCP server runs over **HTTPS** by default. On first startup it auto-generates a self-signed certificate under `mcp_server/certs/`. You can supply your own certificates via environment variables:
+
+| Variable | Default | Description |
+|---|---|---|
+| `MCP_ENABLE_HTTPS` | `true` | Set to `false` to fall back to plain HTTP |
+| `MCP_SSL_CERTFILE` | *(auto-generated)* | Path to a PEM certificate file |
+| `MCP_SSL_KEYFILE` | *(auto-generated)* | Path to a PEM private key file |
+
+**Testing with curl** (use `-k` to accept the self-signed certificate):
 
 ```bash
-# MCP Initialize Handshake
-curl -X POST http://<VM_IP>:8003/mcp \
+# MCP Initialize Handshake (HTTPS)
+curl -k -X POST https://<VM_IP>:8003/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{
@@ -398,7 +409,7 @@ After all four stages are deployed, the following services run concurrently on t
 | 8501 | Streamlit | HTTP | Stage 1 | Web Browser |
 | 8000 | FastAPI | REST / HTTP | Stage 2 | Microsoft Copilot Studio |
 | 8002 | A2A Server | JSON-RPC 2.0 | Stage 3 | GitHub Copilot |
-| 8003 | MCP Server | MCP Streamable HTTP | Stage 4 | Microsoft Copilot Studio |
+| 8003 | MCP Server | MCP Streamable **HTTPS** | Stage 4 | Microsoft Copilot Studio |
 
 All services are managed by `systemd` and configured to restart automatically on failure.
 
@@ -412,7 +423,7 @@ All services are managed by `systemd` and configured to restart automatically on
 | Azure VM to Azure SQL Database | SQL Authentication | Username and password stored in `.env` |
 | External Client to FastAPI (Stage 2) | API Key | `X-API-Key` header, 256-bit random key |
 | External Client to A2A (Stage 3) | API Key (optional) | `X-API-Key` header, same key as Stage 2 |
-| External Client to MCP (Stage 4) | None | Stateless HTTP transport |
+| External Client to MCP (Stage 4) | None | HTTPS with self-signed certificate (TLS 1.2+) |
 
 ---
 

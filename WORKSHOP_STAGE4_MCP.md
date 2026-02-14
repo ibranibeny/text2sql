@@ -3,22 +3,22 @@
 ## Overview
 
 Stage 4 exposes the Text-to-SQL agent as a **Model Context Protocol (MCP)** server
-using **Streamable HTTP** transport. This enables **Microsoft Copilot Studio** to
-discover and invoke the agent's tools automatically.
+using **Streamable HTTP** transport over **HTTPS**. This enables **Microsoft Copilot Studio** to
+discover and invoke the agent's tools automatically via a secure TLS connection.
 
 | Layer | Port | Protocol | Purpose |
 |-------|------|----------|---------|
 | Streamlit | 8501 | HTTP | Chat UI (Stage 1) |
 | FastAPI | 8000 | REST | Copilot Studio connector (Stage 2) |
 | A2A | 8002 | JSON-RPC | Agent-to-Agent (Stage 3) |
-| **MCP** | **8003** | **MCP/Streamable HTTP** | **Copilot Studio MCP (Stage 4)** |
+| **MCP** | **8003** | **MCP/Streamable HTTP (HTTPS)** | **Copilot Studio MCP (Stage 4)** |
 
 ## Architecture
 
 ```
-┌──────────────────────┐      MCP Streamable HTTP       ┌─────────────────────┐
+┌──────────────────────┐      MCP Streamable HTTPS      ┌─────────────────────┐
 │  Microsoft Copilot   │  ────────────────────────────►  │    MCP Server       │
-│  Studio              │  POST /mcp (JSON-RPC 2.0)      │    (port 8003)      │
+│  Studio              │  POST /mcp (JSON-RPC 2.0/TLS)  │    (port 8003)      │
 │                      │  ◄────────────────────────────  │                     │
 └──────────────────────┘      JSON / SSE responses       │  ┌───────────────┐  │
                                                          │  │  agent.py     │  │
@@ -71,7 +71,7 @@ chmod +x deploy_stage4.sh
 ### 1. Initialize (MCP handshake)
 
 ```bash
-curl -X POST http://<VM_IP>:8003/mcp \
+curl -k -X POST https://<VM_IP>:8003/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{
@@ -102,7 +102,7 @@ Expected response:
 ### 2. List tools
 
 ```bash
-curl -X POST http://<VM_IP>:8003/mcp \
+curl -k -X POST https://<VM_IP>:8003/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}'
@@ -111,7 +111,7 @@ curl -X POST http://<VM_IP>:8003/mcp \
 ### 3. Call a tool
 
 ```bash
-curl -X POST http://<VM_IP>:8003/mcp \
+curl -k -X POST https://<VM_IP>:8003/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{
@@ -135,7 +135,7 @@ curl -X POST http://<VM_IP>:8003/mcp \
 4. Fill in:
    - **Server name**: `Text2SQL Database`
    - **Server description**: `Queries the SalesDB database using natural language. Has tools to ask questions, view schema, and run SQL queries.`
-   - **Server URL**: `http://<VM_IP>:8003/mcp`
+   - **Server URL**: `https://<VM_IP>:8003/mcp`
 5. **Authentication**: Select `None` (or `API Key` with header name `X-API-Key`)
 6. Click **Create** → **Add to agent**
 
@@ -154,7 +154,7 @@ info:
 host: <VM_IP>:8003
 basePath: /
 schemes:
-  - http
+  - https
 paths:
   /mcp:
     post:
@@ -175,6 +175,7 @@ paths:
 | Feature | REST API (Stage 2) | A2A (Stage 3) | MCP (Stage 4) |
 |---------|-------------------|---------------|----------------|
 | Protocol | HTTP REST | JSON-RPC (A2A spec) | JSON-RPC (MCP spec) |
+| Transport Security | HTTP | HTTP | **HTTPS (TLS)** |
 | Discovery | OpenAPI/Swagger | Agent Card | `initialize` + `tools/list` |
 | Invocation | `POST /api/ask` | `tasks/send` | `tools/call` |
 | Streaming | No | SSE (optional) | SSE (Streamable HTTP) |
@@ -186,9 +187,39 @@ paths:
 
 | File | Description |
 |------|-------------|
-| `mcp_server/server.py` | MCP server with tools (FastMCP + Streamable HTTP) |
+| `mcp_server/server.py` | MCP server with HTTPS + tools (FastMCP + Streamable HTTP) |
 | `deploy_stage4.sh` | Automated deployment script |
 | `WORKSHOP_STAGE4_MCP.md` | This documentation |
+
+## HTTPS / SSL Configuration
+
+The MCP server runs over **HTTPS by default** using a self-signed TLS certificate. On first startup, the server auto-generates a certificate and key under `mcp_server/certs/`.
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MCP_ENABLE_HTTPS` | `true` | Set to `false` to disable HTTPS and use plain HTTP |
+| `MCP_SSL_CERTFILE` | *(auto-generated)* | Path to a custom PEM certificate file |
+| `MCP_SSL_KEYFILE` | *(auto-generated)* | Path to a custom PEM private key file |
+
+### Using Custom Certificates
+
+To use your own TLS certificate (e.g., from Let's Encrypt or an internal CA):
+
+```bash
+# Set in .env or systemd environment
+MCP_SSL_CERTFILE=/path/to/fullchain.pem
+MCP_SSL_KEYFILE=/path/to/privkey.pem
+```
+
+### Disabling HTTPS
+
+To fall back to plain HTTP (not recommended for production):
+
+```bash
+MCP_ENABLE_HTTPS=false
+```
 
 ## Troubleshooting
 
@@ -214,7 +245,7 @@ sudo ss -tlnp | grep 8003
 ### MCP errors
 ```bash
 # Test initialize
-curl -v -X POST http://<VM_IP>:8003/mcp \
+curl -vk -X POST https://<VM_IP>:8003/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}'

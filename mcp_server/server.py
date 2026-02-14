@@ -25,6 +25,8 @@ Usage:
 import os
 import sys
 import logging
+import ssl
+from pathlib import Path
 from datetime import datetime, date
 from decimal import Decimal
 
@@ -47,6 +49,103 @@ logging.basicConfig(
 logger = logging.getLogger("text2sql-mcp")
 
 PORT = int(os.getenv("MCP_PORT", "8003"))
+
+# ---------------------------------------------------------------------------
+# HTTPS / SSL Configuration
+# ---------------------------------------------------------------------------
+SSL_CERTFILE = os.getenv("MCP_SSL_CERTFILE", "")
+SSL_KEYFILE = os.getenv("MCP_SSL_KEYFILE", "")
+ENABLE_HTTPS = os.getenv("MCP_ENABLE_HTTPS", "true").lower() in ("1", "true", "yes")
+
+# Default certificate paths (auto-generated self-signed if not provided)
+DEFAULT_CERT_DIR = Path(__file__).parent / "certs"
+DEFAULT_CERTFILE = DEFAULT_CERT_DIR / "server.crt"
+DEFAULT_KEYFILE = DEFAULT_CERT_DIR / "server.key"
+
+
+def _generate_self_signed_cert(cert_path: Path, key_path: Path) -> None:
+    """Generate a self-signed certificate for development/workshop use."""
+    try:
+        from cryptography import x509
+        from cryptography.x509.oid import NameOID
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        import datetime as _dt
+
+        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+
+        subject = issuer = x509.Name([
+            x509.NameAttribute(NameOID.COMMON_NAME, "text2sql-mcp"),
+            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Text2SQL Workshop"),
+        ])
+
+        cert = (
+            x509.CertificateBuilder()
+            .subject_name(subject)
+            .issuer_name(issuer)
+            .public_key(key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(_dt.datetime.now(_dt.timezone.utc))
+            .not_valid_after(_dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(days=365))
+            .add_extension(
+                x509.SubjectAlternativeName([
+                    x509.DNSName("localhost"),
+                    x509.DNSName("*"),
+                    x509.IPAddress(ipaddress.IPv4Address("127.0.0.1")),
+                    x509.IPAddress(ipaddress.IPv4Address("0.0.0.0")),
+                ]),
+                critical=False,
+            )
+            .sign(key, hashes.SHA256())
+        )
+
+        cert_path.parent.mkdir(parents=True, exist_ok=True)
+
+        cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+        key_path.write_bytes(
+            key.private_bytes(
+                serialization.Encoding.PEM,
+                serialization.PrivateFormat.TraditionalOpenSSL,
+                serialization.NoEncryption(),
+            )
+        )
+        # Restrict key file permissions
+        os.chmod(key_path, 0o600)
+
+        logger.info(f"Generated self-signed certificate: {cert_path}")
+    except ImportError:
+        logger.error(
+            "Cannot generate self-signed cert: 'cryptography' package not installed. "
+            "Install with: pip install cryptography"
+        )
+        raise
+
+
+def _resolve_ssl_paths() -> tuple:
+    """Resolve SSL cert/key file paths. Returns (certfile, keyfile) or (None, None)."""
+    if not ENABLE_HTTPS:
+        logger.info("HTTPS disabled (MCP_ENABLE_HTTPS=false)")
+        return None, None
+
+    # Use explicitly provided paths
+    if SSL_CERTFILE and SSL_KEYFILE:
+        cert, key = Path(SSL_CERTFILE), Path(SSL_KEYFILE)
+        if cert.is_file() and key.is_file():
+            logger.info(f"Using provided SSL cert: {cert}")
+            return str(cert), str(key)
+        else:
+            logger.error(f"SSL cert/key not found: {cert}, {key}")
+            raise FileNotFoundError(f"SSL files not found: {cert}, {key}")
+
+    # Auto-generate self-signed if defaults don't exist
+    if not DEFAULT_CERTFILE.is_file() or not DEFAULT_KEYFILE.is_file():
+        logger.info("No SSL certificates found — generating self-signed certificate...")
+        _generate_self_signed_cert(DEFAULT_CERTFILE, DEFAULT_KEYFILE)
+
+    return str(DEFAULT_CERTFILE), str(DEFAULT_KEYFILE)
+
+
+import ipaddress  # needed for SAN IP addresses in cert generation
 
 # ---------------------------------------------------------------------------
 # MCP Server
@@ -192,6 +291,26 @@ def salesdb_schema() -> str:
 # Run
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
-    logger.info(f"Starting Text2SQL MCP server on port {PORT}")
-    logger.info(f"MCP endpoint: http://0.0.0.0:{PORT}/mcp")
-    mcp.run(transport="streamable-http")
+    certfile, keyfile = _resolve_ssl_paths()
+
+    if certfile and keyfile:
+        scheme = "https"
+        logger.info(f"Starting Text2SQL MCP server on port {PORT} (HTTPS)")
+        logger.info(f"MCP endpoint: https://0.0.0.0:{PORT}/mcp")
+        logger.info(f"SSL cert: {certfile}")
+
+        import uvicorn
+
+        app = mcp.streamable_http_app()
+        uvicorn.run(
+            app,
+            host="0.0.0.0",
+            port=PORT,
+            ssl_certfile=certfile,
+            ssl_keyfile=keyfile,
+            log_level="info",
+        )
+    else:
+        logger.info(f"Starting Text2SQL MCP server on port {PORT} (HTTP)")
+        logger.info(f"MCP endpoint: http://0.0.0.0:{PORT}/mcp")
+        mcp.run(transport="streamable-http")
