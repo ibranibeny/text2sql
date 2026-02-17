@@ -129,14 +129,32 @@ sed -i 's/\r$//' "$APP_DIR/seed_data.sql"
 echo "  ✓ Database seeded."
 
 # -----------------------------------------------------------
-# 6. Systemd service for Streamlit
+# 6. Add swap space (prevents OOM kills on Standard_B2s)
 # -----------------------------------------------------------
-echo "[6/7] Creating systemd service for Streamlit..."
+echo "[6/8] Adding swap space..."
+if ! swapon --show | grep -q /swapfile; then
+    sudo fallocate -l 2G /swapfile
+    sudo chmod 600 /swapfile
+    sudo mkswap /swapfile
+    sudo swapon /swapfile
+    if ! grep -q '/swapfile' /etc/fstab; then
+        echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+    fi
+    echo "  ✓ 2GB swap created and activated."
+else
+    echo "  ✓ Swap already active."
+fi
+
+# -----------------------------------------------------------
+# 7. Systemd service for Streamlit (hardened)
+# -----------------------------------------------------------
+echo "[7/8] Creating systemd service for Streamlit..."
 
 sudo tee /etc/systemd/system/text2sql.service > /dev/null <<EOF
 [Unit]
 Description=Text-to-SQL Streamlit Application
-After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
@@ -147,6 +165,12 @@ Environment=PATH=$APP_DIR/venv/bin:/usr/local/bin:/usr/bin:/bin
 ExecStart=$APP_DIR/venv/bin/streamlit run app.py --server.port=8501 --server.headless=true --server.address=0.0.0.0
 Restart=always
 RestartSec=5
+StartLimitIntervalSec=300
+StartLimitBurst=10
+MemoryMax=1G
+OOMPolicy=continue
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
@@ -154,12 +178,12 @@ EOF
 
 sudo systemctl daemon-reload
 sudo systemctl enable text2sql.service
-echo "  ✓ Systemd service created."
+echo "  ✓ Systemd service created (hardened with auto-restart + OOM protection)."
 
 # -----------------------------------------------------------
-# 7. Start the application
+# 8. Start the application
 # -----------------------------------------------------------
-echo "[7/7] Starting Streamlit application..."
+echo "[8/8] Starting Streamlit application..."
 sudo systemctl start text2sql.service
 
 # Wait a moment and check status

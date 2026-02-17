@@ -121,7 +121,7 @@ cd /home/azureuser/text2sql
 . venv/bin/activate
 pip install --quiet "mcp[cli]>=1.5.0" cryptography 2>&1 | tail -5
 echo "Verify:"
-python3 -c "import mcp; print(f\"mcp {mcp.__version__ if hasattr(mcp, '__version__') else 'OK'}\")"
+python3 -c "import mcp; print(f\"mcp {mcp.__version__ if hasattr(mcp, '\''__version__'\'') else '\''OK'\''}\")"
 python3 -c "from mcp.server.fastmcp import FastMCP; print(\"FastMCP import OK\")"
 echo "Install complete."
 ' --output none 2>/dev/null
@@ -140,10 +140,21 @@ az vm run-command invoke \
     --command-id RunShellScript \
     --scripts '#!/bin/bash
 
+# Add swap if not present (prevents OOM on Standard_B2s)
+if ! swapon --show | grep -q /swapfile; then
+    sudo fallocate -l 2G /swapfile
+    sudo chmod 600 /swapfile
+    sudo mkswap /swapfile
+    sudo swapon /swapfile
+    grep -q "/swapfile" /etc/fstab || echo "/swapfile none swap sw 0 0" | sudo tee -a /etc/fstab
+    echo "Swap created."
+fi
+
 sudo tee /etc/systemd/system/text2sql-mcp.service > /dev/null << UNIT
 [Unit]
 Description=Text2SQL MCP Server (Model Context Protocol)
-After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
@@ -151,10 +162,17 @@ User=azureuser
 WorkingDirectory=/home/azureuser/text2sql/mcp_server
 EnvironmentFile=/home/azureuser/text2sql/.env
 Environment=MCP_PORT=8003
+Environment=MCP_HTTP_PORT=8004
 Environment=MCP_ENABLE_HTTPS=true
 ExecStart=/home/azureuser/text2sql/venv/bin/python3 server.py
 Restart=always
 RestartSec=5
+StartLimitIntervalSec=300
+StartLimitBurst=10
+MemoryMax=1G
+OOMPolicy=continue
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
