@@ -477,7 +477,6 @@ This will permanently delete all resources including the VM, SQL Database, AI Se
 | Azure AI Foundry | https://ai.azure.com |
 | FastAPI Documentation | https://fastapi.tiangolo.com |
 | Streamlit Documentation | https://docs.streamlit.io |
-| Google A2A Protocol Specification | https://github.com/google/A2A |
 | Model Context Protocol (MCP) | https://modelcontextprotocol.io |
 | Microsoft Copilot Studio | https://learn.microsoft.com/en-us/microsoft-copilot-studio/ |
 | Azure CLI Installation | https://learn.microsoft.com/en-us/cli/azure/install-azure-cli |
