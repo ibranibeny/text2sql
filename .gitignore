@@ -16,3 +16,11 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/
+# MCP client config
+.openmcp/
+
+# Runtime logs
+logs/
+
+# SSL certs (auto-generated)
+*.pem

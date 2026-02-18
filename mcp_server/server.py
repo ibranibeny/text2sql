@@ -24,6 +24,7 @@ Usage:
 
 import os
 import sys
+import json
 import logging
 import ssl
 from pathlib import Path
@@ -47,6 +48,26 @@ logging.basicConfig(
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
 )
 logger = logging.getLogger("text2sql-mcp")
+
+# ---------------------------------------------------------------------------
+# Access Log — separate file logger for HTTP requests
+# ---------------------------------------------------------------------------
+LOG_DIR = Path(__file__).parent.parent / "logs"
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+ACCESS_LOG_FILE = LOG_DIR / "mcp_access.log"
+
+access_logger = logging.getLogger("mcp-access")
+access_logger.setLevel(logging.INFO)
+access_logger.propagate = False  # Don't duplicate to root logger
+
+_access_handler = logging.FileHandler(ACCESS_LOG_FILE, encoding="utf-8")
+_access_handler.setFormatter(logging.Formatter("%(message)s"))
+access_logger.addHandler(_access_handler)
+
+# Also log to stdout for visibility
+_access_stdout = logging.StreamHandler(sys.stdout)
+_access_stdout.setFormatter(logging.Formatter("%(message)s"))
+access_logger.addHandler(_access_stdout)
 
 PORT = int(os.getenv("MCP_PORT", "8003"))
 HTTP_PORT = int(os.getenv("MCP_HTTP_PORT", "8004"))  # Plain HTTP port for local MCP clients
@@ -147,6 +168,90 @@ def _resolve_ssl_paths() -> tuple:
 
 
 import ipaddress  # needed for SAN IP addresses in cert generation
+
+
+# ---------------------------------------------------------------------------
+# Access Log Middleware (ASGI)
+# ---------------------------------------------------------------------------
+class AccessLogMiddleware:
+    """ASGI middleware that logs every HTTP request in Apache Combined-like format."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+
+        import time as _time
+
+        start = _time.monotonic()
+        method = scope.get("method", "-")
+        path = scope.get("path", "/")
+        query = scope.get("query_string", b"").decode("utf-8", errors="replace")
+        if query:
+            path = f"{path}?{query}"
+
+        # Client IP
+        client = scope.get("client")
+        client_ip = client[0] if client else "-"
+        client_port = client[1] if client else 0
+
+        # Headers
+        headers = dict(scope.get("headers", []))
+        user_agent = headers.get(b"user-agent", b"-").decode("utf-8", errors="replace")
+        content_type = headers.get(b"content-type", b"-").decode("utf-8", errors="replace")
+
+        # Read request body (for JSON-RPC method extraction)
+        body_parts = []
+
+        async def receive_wrapper():
+            msg = await receive()
+            if msg.get("type") == "http.request":
+                body_parts.append(msg.get("body", b""))
+            return msg
+
+        # Capture response status
+        status_code = 0
+
+        async def send_wrapper(message):
+            nonlocal status_code
+            if message["type"] == "http.response.start":
+                status_code = message.get("status", 0)
+            await send(message)
+
+        try:
+            await self.app(scope, receive_wrapper, send_wrapper)
+        finally:
+            elapsed_ms = (_time.monotonic() - start) * 1000
+
+            # Try to extract JSON-RPC method from body
+            rpc_method = "-"
+            rpc_id = "-"
+            tool_name = "-"
+            if body_parts:
+                try:
+                    body_str = b"".join(body_parts).decode("utf-8", errors="replace")
+                    body_json = json.loads(body_str)
+                    rpc_method = body_json.get("method", "-")
+                    rpc_id = str(body_json.get("id", "-"))
+                    # Extract tool name from params
+                    params = body_json.get("params", {})
+                    if isinstance(params, dict):
+                        tool_name = params.get("name", params.get("uri", "-"))
+                except (json.JSONDecodeError, AttributeError):
+                    pass
+
+            # Format: timestamp | client_ip | method path | status | time_ms | rpc_method | tool | user_agent
+            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            log_line = (
+                f"{ts} | {client_ip}:{client_port} | {method} {path} | "
+                f"{status_code} | {elapsed_ms:.1f}ms | "
+                f"rpc={rpc_method} id={rpc_id} tool={tool_name} | "
+                f"{user_agent}"
+            )
+            access_logger.info(log_line)
+
 
 # ---------------------------------------------------------------------------
 # MCP Server
@@ -329,7 +434,7 @@ if __name__ == "__main__":
             logger.info(f"Starting HTTP listener on port {HTTP_PORT} (for local MCP clients)")
             logger.info(f"MCP endpoint (HTTP): http://0.0.0.0:{HTTP_PORT}/mcp")
             mcp_http = _create_mcp_instance("http", HTTP_PORT)
-            http_app = mcp_http.streamable_http_app()
+            http_app = AccessLogMiddleware(mcp_http.streamable_http_app())
             uvicorn.run(http_app, host="0.0.0.0", port=HTTP_PORT, log_level="info")
 
         http_thread = threading.Thread(target=run_http, daemon=True)
@@ -340,7 +445,7 @@ if __name__ == "__main__":
         logger.info(f"MCP endpoint (HTTPS): https://0.0.0.0:{PORT}/mcp")
         logger.info(f"SSL cert: {certfile}")
         mcp_https = _create_mcp_instance("https", PORT)
-        https_app = mcp_https.streamable_http_app()
+        https_app = AccessLogMiddleware(mcp_https.streamable_http_app())
         uvicorn.run(
             https_app,
             host="0.0.0.0",
